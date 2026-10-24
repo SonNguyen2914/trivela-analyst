@@ -12,14 +12,18 @@ export interface LlmClient {
 class ClaudeClient implements LlmClient {
   name = "claude";
   constructor(private key: string, private model: string) {}
-  async complete(system: string, messages: ChatMessage[], maxTokens = 900): Promise<LlmResult> {
+  async complete(system: string, messages: ChatMessage[], maxTokens = 4000): Promise<LlmResult> {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": this.key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: this.model, max_tokens: maxTokens, temperature: 0.3, system, messages }),
-      signal: AbortSignal.timeout(30000),
+      // Current Claude models reject `temperature`; the defaults are used.
+      body: JSON.stringify({ model: this.model, max_tokens: maxTokens, system, messages }),
+      signal: AbortSignal.timeout(55000),
     });
-    if (!r.ok) throw new Error(`Claude API ${r.status}`);
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(`Claude API ${r.status}: ${String(e?.error?.message ?? "").slice(0, 80)}`);
+    }
     const j = await r.json();
     const text = (j.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
     return { text, provider: "claude", model: this.model };
@@ -29,7 +33,7 @@ class ClaudeClient implements LlmClient {
 class GeminiClient implements LlmClient {
   name = "gemini";
   constructor(private key: string, private model: string) {}
-  async complete(system: string, messages: ChatMessage[], maxTokens = 900): Promise<LlmResult> {
+  async complete(system: string, messages: ChatMessage[], maxTokens = 4000): Promise<LlmResult> {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": this.key },
@@ -38,7 +42,7 @@ class GeminiClient implements LlmClient {
         contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
         generationConfig: { temperature: 0.3, maxOutputTokens: maxTokens },
       }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(55000),
     });
     if (!r.ok) throw new Error(`Gemini API ${r.status}`);
     const j = await r.json();

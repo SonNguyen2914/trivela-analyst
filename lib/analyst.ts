@@ -126,7 +126,7 @@ export async function runAsk(sheet: FactSheet, question: string, client: LlmClie
   let provider = client.name, model = "";
   try {
     for (let attempt = 1; attempt <= 2; attempt++) {
-      const res = await client.complete(system, messages, 400);
+      const res = await client.complete(system, messages, 2500);
       provider = res.provider; model = res.model;
       const { violations } = checkText(res.text, sheet);
       trace.push({ attempt, raw: res.text, violations });
