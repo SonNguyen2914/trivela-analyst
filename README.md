@@ -4,7 +4,7 @@
 
 CS4680 Prompt Engineering · Assignment 3 (AI Assistant Project) · Nam Son Nguyen
 
-> **Status: refinement stage.** Trivela Analyst is built for [namson.dev](https://namson.dev/bet-suggester), my live soccer prediction site, and runs on its real model data. It goes live on namson.dev on **October 25, 2026**.
+> **Status:** Live on namson.dev since Oct 25, 2026 as **Trivela VAR** (Verified Analyst Read): https://namson.dev/bet-suggester/var
 
 ## The problem
 
@@ -83,7 +83,6 @@ Run the tests with `npm test`. They cover the fact sheet, the verifier (rounding
 
 ## Future work
 
-- **Oct 25, 2026:** launch on namson.dev (analyst.namson.dev, linked from every match page).
-- A native Analyst panel on every namson.dev match page.
+- **Shipped Oct 25, 2026:** launched on namson.dev as Trivela VAR, with a native panel on namson.dev match pages.
 - Live in-play commentary that re-reads the model each minute.
 - A post-match "what the model got right and wrong" review.
