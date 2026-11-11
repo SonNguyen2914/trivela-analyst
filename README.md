@@ -59,6 +59,96 @@ Trivela public API ─► Fact sheet (every number gets an id: F1, F2 …)
 
 The assembled system prompt is visible in the app under **How the Analyst works**.
 
+## Trivela Agent (Assignment 4: AI Agent Project)
+
+**Trivela Agent turns a plain-English request into actions.** The language model writes a plan, the person sees every step, and Trivela's own code checks the plan and runs it. The model never runs anything itself. Open it at `/agent`, or `/agent?demo=1` for the saved demo matches.
+
+Example requests:
+
+- "Compare model vs market for every match"
+- "Track Arsenal vs Everton if the gap is over 5%"
+- "Export a report for Rayo vs Elche as CSV"
+- "I think Arsenal win, log it with high confidence, then show my journal"
+- "Clear my prediction journal" (a destructive step: it needs a Confirm click)
+- "Delete it" (unclear: the agent asks a question instead of acting)
+
+### Architecture
+
+```
+ person ─► /agent page ─► POST /api/agent/plan
+                              │  rate limit (10 a minute per IP) + daily LLM cap
+                              ▼
+        system prompt = persona + JSON template (tool registry + match catalog injected)
+                        + few-shot + verification ladder
+                              │
+                              ▼
+                 LLM (Claude or Gemini, retries on 429/5xx)
+                              │  strict JSON: {"plan":[{tool,args,why,depends_on}],"summary"}
+                              ▼
+     validator: tool in registry? args match schema and range? match key in catalog?
+          │ fails                                         │ passes
+          ▼                                               ▼
+  errors sent back once ─► still fails:          plan stored, shown as step cards
+  clear error, nothing runs                       (nothing has run yet)
+                                                          │ person clicks Run
+                                                          ▼
+                                     POST /api/agent/execute, one step at a time
+                                     · steps run in order; a failed step skips the
+                                       steps that depend on it
+                                     · destructive step: refused without a single-use
+                                       token from POST /api/agent/confirm
+                                                          │
+                                  ┌───────────────┬───────┴──────┬────────────────┐
+                                  ▼               ▼              ▼                ▼
+                          Trivela public API   SQLite tables   exports/ folder   capped simulation
+                          (read-only)                                             (read-only)
+                                  └──────── every outcome ─► audit_log (append-only)
+```
+
+### Tools (the whole registry)
+
+| Domain | Tool | What it does |
+|---|---|---|
+| API calls | `list_matches` | The matches the agent may act on (upcoming Trivela fixtures plus saved demo matches). |
+| API calls | `get_prediction(match)` | Trivela's win/draw/loss probabilities, expected goals and likeliest scores. |
+| API calls | `get_market_prices(match)` | The prediction market's 3-way prices. |
+| API calls | `compare_model_vs_market(match)` | Model vs market per outcome, overround removed, gap in points. |
+| Database | `add_to_watchlist(match, threshold_pts)` | Track a match; flagged when the gap is over the threshold. |
+| Database | `list_watchlist()` | The watchlist with each match's current gap and status. |
+| Database | `remove_from_watchlist(id)` **destructive** | Remove one entry; needs confirmation. |
+| Database | `log_pick(match, outcome, confidence)` | Record your own prediction next to the model's probability. |
+| Database | `list_picks()` | Your prediction journal. |
+| Database | `clear_picks()` **destructive** | Empty the journal; needs confirmation. |
+| Files | `export_report(match, format=md\|csv)` | Writes a report to the sandboxed `exports/` folder and returns a download link. |
+| System | `run_simulation(match, n_sims)` | A Monte Carlo re-run (Poisson) from the model's own expected goals, `n_sims` capped at 1,000–50,000. Read-only. |
+
+Tables: `plans`, `step_runs`, `watchlist`, `picks`, `exports`, `confirm_tokens`, `audit_log` ([`lib/agent/store.ts`](lib/agent/store.ts)).
+
+### Safety design
+
+- **No code from the model.** The model returns JSON only. The registry ([`lib/agent/tools.ts`](lib/agent/tools.ts)) is the only thing that can run: no `eval`, no shell, no free-form paths.
+- **Validate everything first** ([`lib/agent/validator.ts`](lib/agent/validator.ts)). Each step's tool must exist and its arguments must match the schema, the range and the live match catalog. A plan with one bad step is rejected whole, so a partial plan never runs. The errors go back to the model for one rewrite; if that fails too, the person sees a clear error.
+- **Confirm destructive steps** ([`lib/agent/executor.ts`](lib/agent/executor.ts)). The server refuses `remove_from_watchlist` and `clear_picks` without a single-use token. The token is bound to one session, one plan and one step, and expires after 5 minutes. It is only issued when the person clicks Confirm.
+- **Failures stop what depends on them.** Each step lists `depends_on`. A failed step skips those steps and says which step failed; independent steps still run.
+- **Audit log** ([`lib/agent/audit.ts`](lib/agent/audit.ts)). Every plan, confirmation, run, refusal and skip is written with its time, session, request, tool, arguments, status and error. Database triggers refuse any UPDATE or DELETE on the log. The page shows the session's log.
+- **Public-demo guards.** 10 plans a minute per IP, a daily LLM call cap, at most 6 steps a plan, per-session caps on watchlist, picks and exports, and LLM retries with exponential backoff and clear error messages. Data is scoped to an anonymous session cookie, so visitors cannot see or change each other's data. Exports are served only to the session that made them, and only from `exports/`.
+- **Read-only on Trivela.** The agent only reads Trivela's public API. It never changes the prediction model.
+
+### Prompt engineering (4 patterns)
+
+| # | Pattern | File | What it does |
+|---|---|---|---|
+| 1 | **Persona** | [`prompts/agent-1-persona.md`](prompts/agent-1-persona.md) | A careful operations agent: plans first, never guesses match ids, asks when unclear, does the least that answers the request, no betting advice. |
+| 2 | **Template** | [`prompts/agent-2-template.md`](prompts/agent-2-template.md) | The strict JSON action schema, with the tool registry and match catalog injected at run time ([`lib/agent/planner.ts`](lib/agent/planner.ts)). |
+| 3 | **Few-shot** | [`prompts/agent-3-few-shot.md`](prompts/agent-3-few-shot.md) | Three requests and their correct plans, including one that asks a clarifying question instead of acting. |
+| 4 | **Verification ladder** (my Assignment 2 pattern) | [`prompts/agent-4-verification.md`](prompts/agent-4-verification.md) + the validator | Answer, confidence, check against Source A (the registry and the live catalog), flag instead of inventing. The server runs the same check, and untraceable steps are never executed. |
+
+The assembled prompt and every attempt's raw output are visible on the page under **How the agent planned this**.
+
+### Run and test
+
+`npm run dev`, then open http://localhost:3100/agent. Without an API key the agent uses a small rule-based planner, so the page and every safety check still work. `npm test` runs the agent tests (validator, planner retry, LLM backoff, executor, confirmation gate, audit log, export sandbox, rate limit) with a mocked LLM and no network. Node 22.13 or newer is needed for the built-in SQLite. Optional settings: `AGENT_DB`, `AGENT_EXPORTS`, `AGENT_PLANS_PER_MIN`.
+
 ## Run it
 
 ```bash

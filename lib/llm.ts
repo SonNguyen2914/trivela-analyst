@@ -4,6 +4,13 @@
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export type LlmResult = { text: string; provider: string; model: string };
 
+// A failed provider call. `status` is the HTTP status (0 = network error or
+// timeout), so callers can tell a retryable failure from a permanent one.
+export class LlmError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+  get retryable() { return this.status === 0 || this.status === 429 || this.status >= 500; }
+}
+
 export interface LlmClient {
   name: string;
   complete(system: string, messages: ChatMessage[], maxTokens?: number): Promise<LlmResult>;
@@ -22,7 +29,7 @@ class ClaudeClient implements LlmClient {
     });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
-      throw new Error(`Claude API ${r.status}: ${String(e?.error?.message ?? "").slice(0, 80)}`);
+      throw new LlmError(r.status, `Claude API ${r.status}: ${String(e?.error?.message ?? "").slice(0, 80)}`);
     }
     const j = await r.json();
     const text = (j.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
@@ -44,7 +51,7 @@ class GeminiClient implements LlmClient {
       }),
       signal: AbortSignal.timeout(55000),
     });
-    if (!r.ok) throw new Error(`Gemini API ${r.status}`);
+    if (!r.ok) throw new LlmError(r.status, `Gemini API ${r.status}`);
     const j = await r.json();
     const text = (j.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("");
     return { text, provider: "gemini", model: this.model };
@@ -75,4 +82,38 @@ export function getClient(): LlmClient {
   if (p === "gemini" && process.env.GEMINI_API_KEY) return new GeminiClient(process.env.GEMINI_API_KEY, process.env.GEMINI_MODEL ?? "gemini-2.5-flash");
   if (p === "claude" && process.env.ANTHROPIC_API_KEY) return new ClaudeClient(process.env.ANTHROPIC_API_KEY, process.env.ANTHROPIC_MODEL ?? "claude-haiku-5-5");
   return new MockClient();
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Retries a client on 429, 5xx, network errors and timeouts, with exponential
+// backoff (base, 2x base, 4x base ...). Permanent errors (400, 401) fail at once.
+export function withRetry(client: LlmClient, tries = 3, baseMs = 800, wait: (ms: number) => Promise<void> = sleep): LlmClient {
+  return {
+    name: client.name,
+    async complete(system, messages, maxTokens) {
+      let last: unknown;
+      for (let i = 0; i < tries; i++) {
+        try {
+          return await client.complete(system, messages, maxTokens);
+        } catch (e) {
+          last = e;
+          const err = e instanceof LlmError ? e : new LlmError(0, String((e as any)?.message ?? e));
+          if (!err.retryable || i === tries - 1) throw err;
+          await wait(baseMs * 2 ** i);
+        }
+      }
+      throw last;
+    },
+  };
+}
+
+// What a person sees when the model call fails. Never includes keys or raw bodies.
+export function friendlyLlmError(e: unknown): string {
+  const s = e instanceof LlmError ? e.status : 0;
+  if (s === 429) return "The language model is busy right now (rate limited). Wait a minute and try again.";
+  if (s === 401 || s === 403) return "The language model rejected this server's credentials. The agent is set up wrong; nothing was run.";
+  if (s >= 500) return "The language model is having problems. Nothing was run; try again in a minute.";
+  if (s === 0) return "The language model did not answer in time. Nothing was run; try again.";
+  return "The language model could not plan this request. Nothing was run.";
 }
