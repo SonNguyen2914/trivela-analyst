@@ -6,3 +6,4 @@ node_modules/
 next-env.d.ts
 recordings/
 test-results/
+var/

@@ -22,3 +22,14 @@ export function takeDailyCall(now = new Date()): boolean {
   calls += 1;
   return true;
 }
+
+// Generic sliding-window limit: at most `limit` hits per `windowMs` per key.
+const windows = new Map<string, number[]>();
+export function allowRate(key: string, limit: number, windowMs: number, now = Date.now()): boolean {
+  const recent = (windows.get(key) ?? []).filter((t) => now - t < windowMs);
+  if (recent.length >= limit) { windows.set(key, recent); return false; }
+  recent.push(now);
+  windows.set(key, recent);
+  return true;
+}
+export function resetRates() { windows.clear(); }
