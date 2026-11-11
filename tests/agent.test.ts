@@ -114,6 +114,11 @@ describe("planner", () => {
     expect(out.result.ok).toBe(false);
     expect(out.trace).toHaveLength(2);
   });
+  it("the no-key fallback planner reads the number of simulations", async () => {
+    const { ruleBasedPlanner } = await import("../lib/agent/planner");
+    const r = await ruleBasedPlanner(catalog).complete("", [{ role: "user", content: "Simulate Montréal vs Nashville 20,000 times" }]);
+    expect(JSON.parse(r.text).plan[0].args.n_sims).toBe(20000);
+  });
   it("turns provider failures into a clear message", async () => {
     const down: LlmClient = { name: "claude", complete: async () => { throw new LlmError(401, "bad key"); } };
     const out = await planRequest("x", catalog, down);

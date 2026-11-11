@@ -91,7 +91,10 @@ export function ruleBasedPlanner(catalog: Catalog): LlmClient {
         const t = Number(q.match(/(\d+(?:\.\d+)?)\s*(%|pts|points)/)?.[1] ?? 5);
         out = { plan: [step("compare_model_vs_market", { match: hit.key }, "Check the current gap."), step("add_to_watchlist", { match: hit.key, threshold_pts: t }, `Flag it when the gap is over ${t} pts.`)], summary: `Track ${label(hit)}.` };
       } else if (/export|report|download/.test(q)) out = { plan: [step("export_report", { match: hit.key, format: /csv/.test(q) ? "csv" : "md" }, "Write the report file.")], summary: `Export a report for ${label(hit)}.` };
-      else if (/simulat/.test(q)) out = { plan: [step("run_simulation", { match: hit.key, n_sims: 10000 }, "Re-simulate from the model's expected goals.")], summary: `Simulate ${label(hit)}.` };
+      else if (/simulat/.test(q)) {
+        const n = Number(q.match(/(\d[\d,]*)\s*(times|runs|sims|simulations)/)?.[1]?.replace(/,/g, "") ?? 10000);
+        out = { plan: [step("run_simulation", { match: hit.key, n_sims: n }, "Re-simulate from the model's expected goals.")], summary: `Simulate ${label(hit)}.` };
+      }
       else out = { plan: [step("get_prediction", { match: hit.key }, "Read the model's prediction."), step("compare_model_vs_market", { match: hit.key }, "See if the market agrees.")], summary: `Prediction and market check for ${label(hit)}.` };
       return { text: JSON.stringify(out), provider: "mock", model: "rules (no API key)" };
     },
